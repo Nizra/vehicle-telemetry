@@ -1,0 +1,44 @@
+--Be alerted when averageEngineTemperature over one minute rises above a certain threshold for every vin
+
+WITH ProcessedTelemetry as (
+    SELECT
+        vin, 
+        System.timestamp() as snapshot,
+        AVG(engineTemperature) as averageEngineTemperature,
+        AVG(speed) as averageSpeed,
+        CASE WHEN AVG(engineTemperature) > 499 THEN 1 ELSE 0 END as hasAlert
+    FROM
+        [vehicleeventhubinput] TIMESTAMP BY [timestamp]
+    GROUP BY 
+        SlidingWindow(minute, 1), vin --Using temporal window
+),
+
+TelemetryWithLastAlert as (
+    SELECT
+        vin, 
+        snapshot,
+        averageEngineTemperature,
+        averageSpeed,
+        hasAlert,
+        LAG(hasAlert) OVER (PARTITION BY vin LIMIT DURATION(day, 1)) as previousAlert --LAG operator to retrieve previous hasAlert for each VIN within one day
+    FROM
+        ProcessedTelemetry        
+)
+
+SELECT * INTO
+    vehiclesaoutput
+FROM
+    TelemetryWithLastAlert
+
+SELECT 
+    vin, 
+    snapshot, 
+    averageEngineTemperature,
+    averageSpeed,
+    hasAlert 
+INTO
+    vehicleeventhuboutput
+FROM
+    TelemetryWithLastAlert 
+WHERE
+    hasAlert = 1 AND (previousAlert IS NULL OR previousAlert = 0)
